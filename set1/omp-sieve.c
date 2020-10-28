@@ -61,32 +61,27 @@
    need to be a multiple of |p|. */
 long mark( char *isprime, long from, long to, long p )
 {
-    long nmarked_fine=0;
+    long nmarked=0;
     
     from = ((from + p - 1)/p)*p; /* start from the lowest multiple of p that is >= from */
 /******************************/
     //const long n = 1000000l;
     const int n_threads = omp_get_max_threads();
-    long nmarked[n_threads];
-    memset(nmarked,0,n_threads*sizeof(long));
 #if __GNUC__ < 9
- #pragma omp parallel for num_threads(n_threads) default(none) shared(from,to,isprime,nmarked,p) 
+ #pragma omp parallel for num_threads(n_threads) default(none) shared(from,to,isprime,p) reduction(+:nmarked) 
 #else
- #pragma omp parallel for num_threads(n_threads) default(none) shared(n_threads,from,to,isprime,nmarked,p)
+ #pragma omp parallel for num_threads(n_threads) default(none) shared(n_threads,from,to,isprime,p) reduction(+:nmarked)
 #endif
     for ( long x=from; x<to; x+=p ) {
         if (isprime[x] == 1) {
             isprime[x] = 0;
   //          printf("(%d):__%ld__\n ehm %ld",omp_get_thread_num(),x,nmarked[omp_get_thread_num()]);
-            nmarked[omp_get_thread_num()]++;
+            nmarked++;
         }
     }
 //qua il pool di thread ha già finito e sta operando un thread solo
 
-    for(int kek=0; kek<n_threads; kek++) { 
-    	nmarked_fine+=nmarked[kek];
-    }
-    return nmarked_fine;
+    return nmarked;
 }
 
 int main( int argc, char *argv[] )
