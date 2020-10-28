@@ -126,10 +126,10 @@ void mergesort_rec(int* v, int i, int j, int* tmp)
            second half of the array; then, wait for all tasks to
            complete before merging the results. */
 
-#pragma omp task
+#pragma omp task shared(v,tmp) firstprivate(i,m)
         	mergesort_rec(v, i, m, tmp);
 
-#pragma omp task
+#pragma omp task shared(v,tmp) firstprivate(j,m)
         	mergesort_rec(v, m+1, j, tmp);
         /* When using OpenMP, we must wait here for the recursive
            invocations of mergesort_rec() to terminate before merging
@@ -156,7 +156,7 @@ void mergesort(int *v, int n)
     /* [TODO] Parallelize the body of this function. You should create
        a pool of thread here, and ensure that only one thread calls
        mergesort_rec() to start the recursion. */ 
-    const int n_threads = omp_get_num_threads();
+    const int n_threads = omp_get_max_threads();
 
 #if __GNUC__ < 9
  #pragma omp parallel num_threads(n_threads) default(none) shared(v,n,tmp)
