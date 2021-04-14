@@ -322,7 +322,7 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     //const v8i ones = (v8i)_mm256_set1_epi32(1);
 
     int index_ex[ViLEN];
-    int index_in[ViLEN];
+
     /*[N/ViLEN +1]*/
   //  int index_in[N+1][ViLEN];
     
@@ -355,18 +355,18 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
  //   assert(! posix_memalign((void**)&q_8, __BIGGEST_ALIGNMENT__, D*sizeof(float)*VfLEN) );
 
 #if __GNUC__ < 9
- #pragma omp parallel num_threads(n_threads) default(none) private(q_8, thread_id, count_in, index_in) shared(i, v8i_s_p, v8i_s, P, p_8, count_ex, index_ex, local_r) reduction(-:r)
+ #pragma omp parallel num_threads(n_threads) default(none) private(q_8, thread_id, count_in) shared(i, v8i_s_p, v8i_s, P, p_8, count_ex, index_ex, local_r) reduction(-:r)
 #else
- #pragma omp parallel num_threads(n_threads) default(none) private(q_8, thread_id, count_in, index_in) shared(n_threads, D, N, P, i, v8i_s_p, v8i_s, p_8, count_ex, index_ex, local_r) reduction(-:r)
+ #pragma omp parallel num_threads(n_threads) default(none) private(q_8, thread_id, count_in) shared(n_threads, D, N, P, i, v8i_s_p, v8i_s, p_8, count_ex, index_ex, local_r) reduction(-:r)
 #endif
 {    
     
     thread_id=omp_get_thread_num();
+    int index_in[ViLEN];
     count_in=0;
     for(int d=0; d<D; d++) P[(N + thread_id)*D+d] = -FLT_MAX;
     local_r[thread_id]=0;
-
-
+	
    // assert(! posix_memalign((void**)&(p_8+thread_id), __BIGGEST_ALIGNMENT__, D*sizeof(float)*(VfLEN + 1)) );
   //  p_8=malloc(D*sizeof(float)*VfLEN);
   //  q_8=malloc(D*sizeof(float)*VfLEN);
@@ -375,7 +375,7 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
 
 
 #pragma omp barrier 
-{
+
     do { 
     //    printf("i=[%d] \n",i);
 #pragma omp master      
@@ -428,11 +428,13 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
                 *(p_8+i)=(v8f)_mm256_setr_ps(P[index_ex[0]*D+i], P[index_ex[1]*D+i], P[index_ex[2]*D+i], P[index_ex[3]*D+i], P[index_ex[4]*D+i], P[index_ex[5]*D+i], P[index_ex[6]*D+i], P[index_ex[7]*D+i]);
             }
         }
-}
+        printf("430 thread id %d\n", thread_id);
 
-#pragma omp for firstprivate(p_8) schedule(static)
+}
+#pragma omp barrier
+#pragma omp for /*firstprivate(p_8)*/ schedule(static)
        for (int j=0; j<N; j++ ) {
-            
+            printf("437 thread id %d\n", thread_id);
             if (v8i_s_p[j]) {
                 
                 index_in[count_in++]=j;
@@ -443,6 +445,7 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
                     //#pragma omp task firstprivate(th_offset_in, th_offset_ex)
 
                //     printf(" ho fatto partire il task %d\n", thread_id );
+                    printf("447(dominates_simd_v2) thread id %d\n", thread_id);
                     local_r[thread_id]+=dominates_simd_v2(P, v8i_s_p, index_in, p_8, q_8, D);
              //      printf("__i:[%d] j:[%d] local_r:[%d]__\n",i,j,local_r[thread_id]); 
             //        printf("ho fatto spawnare sto cazzo di task? %d\n", thread_id);
@@ -452,7 +455,7 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
 
         }
 
-#pragma omp for firstprivate(p_8) schedule(static)
+#pragma omp for /*firstprivate(p_8)*/ schedule(static)
         for(int j=0; j<n_threads; j++){
             if(count_in) {
             /* devo gestire i rimanenti*/
@@ -480,12 +483,10 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     }
   */
 
-} /* fine di omp single */
-
     //free(p_8);
     free(q_8);
     r-=local_r[thread_id];
-//#pragma omp barrier
+/* fine regione parallela */
 }
     return r;
 }
