@@ -742,6 +742,7 @@ int main( int argc, char* argv[] )
     read_input(&points);
     int* s;
     v8i* v8i_s;
+    printf("vediamo\n");
     /* calcolo quanta memoria aggiuntiva devo allocare per far si che sia multiplo di VLEN */
     const size_t mem_vlen = points.N + (ViLEN - points.N%ViLEN)%ViLEN;
 #if 1
@@ -752,10 +753,11 @@ int main( int argc, char* argv[] )
 #endif
     assert(s);
     assert(v8i_s);
+    printf("vediamo2\n");
     const double tstart = hpc_gettime();
     const int r = skyline(&points, s);
     const double elapsed = hpc_gettime() - tstart;
-    //printf("qui forse\n");
+    printf("qui forse\n");
 
     //print_skyline(&points, s, r);
 
@@ -764,7 +766,7 @@ int main( int argc, char* argv[] )
             points.N, points.D, r, elapsed);
 
     const double ts = hpc_gettime();
-    const int r_simd = skyline_simd(&points, v8i_s);
+    const int r_simd = skyline_simd_for(&points, v8i_s);
     const double el = hpc_gettime() - ts;
     fprintf(stderr,
         "\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
