@@ -90,7 +90,7 @@ void read_input( points_t *points )
         fprintf(stderr, "FATAL: can not read the number of points\n");
         exit(EXIT_FAILURE);
     }
-  //  const size_t mem_vlen_mul = (VfLEN - N%VfLEN)%VfLEN;
+    /* devo aggiungere n-threads punti che mi serviranno durante la funzione di skyline, inoltre uso la posix_memalign */
 #if 1
     assert(!posix_memalign((void**)&P, __BIGGEST_ALIGNMENT__, D * ( N + omp_get_max_threads() ) * sizeof(*P) ) );
     assert(P);
@@ -105,12 +105,7 @@ void read_input( points_t *points )
             }
         }
     }
-    /*  se N non fosse multiplo di VLEN setto i valori eccessivi aggiunti uguali
-        ai primi punti che si incontrano in modo da non interferire col risultato 
-        dello skyline */
-#if 0
-    if(mem_vlen_mul) memcpy(P+N, P, D*mem_vlen_mul*sizeof(*P));
-#endif
+
     points->P = P;
     points->N = N;
     points->D = D;
@@ -292,13 +287,18 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     int i = 0, r = N;
     int count_ex=0, count_in;
     int local_r[n_threads];
+    /* index_ex è il vettore contenente gli indici dei punti che andranno a riempire p_8 
+    p_8 e q_8 sono vettori di punti veri e propri che verranno passati alla funzione dominates_simd_v2() 
+    q_8 è allocato con la posix_memalign poco sotto sia perché ha bisogno di 1 spazio in più sia per 
+    poter usare le funzioni simd, p_8 verrà riempito solo dal thread master mentre ogni thread lavorerà 
+    col proprio q_8 */
     int index_ex[ViLEN]; 
     v8f p_8[D];
     v8f* q_8;
 
 
 
-
+    /* v8i_s è il corrispondende del vettore s in cui vi sono 1 per i punti non dominati e 0 per i punti dominati */
 
     for (i=0; i<N/ViLEN +1; i++) {
         *(v8i_s+i) = (v8i)_mm256_set1_epi32(1); /* {1,1,1,1,
@@ -308,6 +308,10 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
 
     if(0 != N%ViLEN) *(v8i_s+i) =(v8i)_mm256_set1_epi32(1);
 
+    /* in questo ciclo setto a 0 degli specifici punti, che saranno usati nel caso in cui non si riescano a 
+    raggiungere 8 punti da passare alla dominates_simd(), punti mancanti verranno riempiti di punti "bonus"
+    che sono aggiunti apposta per non interferire con l'algoritmo e ogni dimensione sotto viene settato al
+    valore più basso possibile */
     for(i=0; i<n_threads; i++) *(v8i_s_p+N+i)=0;
 
     i=0;
@@ -323,7 +327,9 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     int index_in[ViLEN];
     int local_i;
     count_in=0;
+    /* ogni thread inizializza un proprio punto "bonus" in modo da evitare race condition */
     for(int d=0; d<D; d++) P[(N + thread_id)*D+d] = -FLT_MAX;
+
     local_r[thread_id]=0;
 	
 
@@ -334,7 +340,13 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
 #pragma omp barrier 
 
     do { 
-
+/* questa prima parte è come se fosse il for più esterno dell'algoritmo originale 
+un solo thread riempie il vettore p_8, scorrendo sull'indice i, per farlo,
+deve trovare i primi 8 punti non dominati e inserire i loro indici in index_ex 
+una volta fatto ciò è come se si entrasse nel ciclo for interno (sempre facendo il
+paragone con l'algoritmo originale) all'interno del quale ogni thread riempie il proprio
+vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali tra queste
+2 coppie di 8 punti sono dominati */
 #pragma omp master      
 {
         count_ex=0;
@@ -348,8 +360,9 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
             ++i;   
         }
         if (count_ex != ViLEN ){
-
+        	/* nel caso in cui non si riescano ad avere 8 punti da inserire in p_8, si inseriscono i punti "bonus" che non posso interferire con la dominates_simd() */
         	while(count_ex < ViLEN) index_ex[count_ex++]=N+thread_id;
+	        
 	        for(int d = 0; d<D ;d++){
 	                *(p_8+d)=(v8f)_mm256_setr_ps(P[index_ex[0]*D+d], P[index_ex[1]*D+d], P[index_ex[2]*D+d], P[index_ex[3]*D+d], P[index_ex[4]*D+d], P[index_ex[5]*D+d], P[index_ex[6]*D+d], P[index_ex[7]*D+d]);
 	        }
@@ -391,7 +404,8 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
 
 #pragma omp atomic read 
         local_i=i;
-#pragma omp barrier
+
+#pragma omp barrier 
     } while(local_i<local_N);
 
 
