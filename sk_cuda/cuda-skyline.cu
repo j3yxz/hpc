@@ -48,6 +48,8 @@
 #include <assert.h>
 
 #define BLKDIM 1024
+#define BLKDIM_1 32
+#define MAX_D 1024 /* serve perché non posso creare array dinamici all'interno dei kernel */
 typedef struct {
     float *P;   /* coordinates P[i][j] of point i               */
     int N;      /* Number of points (rows of matrix P)          */
@@ -133,142 +135,460 @@ int dominates( const float * p, const float * q, int D )
  * a suitably sized array |s|.
  */
 
-__global__ void dominates_kernel(int p, int N, int D, float* d_i, int* d_s, float* d_P){
-    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    extern __shared__ float s_p[];
-    int k;
-    if(tid >= N || tid == p || d_s[tid] == 0){
-        return;
-    } else {
-        //dominates d_s[p] & d_s[tid]
-        for (k=0; k<D; k++) {
-            if (d_i[tid*D+k] < d_P[tid*D+k]) {
-                return;
-            }
-        }
-        for (k=0; k<D; k++) {
-            if (d_i[tid*D+k] > d_P[tid*D+k]) {
-                d_s[tid]=0;
-                return;
-            }
-        }
-    }
-    return;
-}
-__global__ void kernel(int i, int N, int D, int *d_s, float *d_P){
+/* in questo kernel accedo in memoria globale nel modo più banale possibile, prendendo D thread che copiano ognuno una coordinata del punto i BLKDIM volte in memoria shered
+    dalla quale poi ogni thread si copia in locale ogni coordinata del punto i senza race condition */
+__global__ void kernel_0(int i, int N, int D, int *d_s, float *d_P){
 
     const int tid = threadIdx.x + blockIdx.x * blockDim.x;
     extern __shared__ float p[];
     int k;
     float temp;
-
-
-
+    float local_p[MAX_D];
+    /* per prima cosa metto in local_p il tutte le dimensioni del punto i-esimo che deve cercare di dominare il punto che ogni thread esamina in base al suo tid */
+    
+    /* metto il punti i in memoria shared da cui ogni thread lo preleva in modo parallelo mettendolo in locale */
     if(threadIdx.x < D){
         /* per accedere in memoria globale una sola volta anziché BLKDIM (credo che dovrebbe ottimizzarlo il compilatore, ma per sicurezza lo lascio) */
         temp=d_P[i*D + threadIdx.x];
-        for(k=0; k<32; k++) {
+        for(k=0; k<BLKDIM_1; k++) {
             p[threadIdx.x * blockDim.x + k] = temp;
-           // p[tid]=-10;
-            //d_i[tid]=temp;
+
         }
-        //p[threadIdx.x + BLKDIM] = d_P[i + threadIdx.x];
+
     }
-    //fin qui tutto
-#if 1
-    __syncthreads();
-    if( tid >= N || tid == i ||d_s[tid] == 0){
+__syncthreads();
+    for(k=0; k<D; k++){
+        local_p[k] = p[threadIdx.x + k*blockDim.x];
+    }
+
+    /* a questo punto controllo effettivamente che il punto i-esimo domini il punto d_P[tid] */
+    if( tid >= N || tid == i || d_s[tid] == 0){
         return;
     } else {
         //dominates d_s[p] & d_s[tid]
-        
+
         for (k=0; k<D; k++) {
-            if (p[blockDim.x * k + threadIdx.x] < d_P[tid*D+k]) {
+            if (local_p[k] < d_P[tid*D+k]) {
                 return;
             }
         }
         for (k=0; k<D; k++) {
-            if (p[blockDim.x * k + threadIdx.x] > d_P[tid*D+k]) {
+            if (local_p[k] > d_P[tid*D+k]) {
 
                 d_s[tid]=0;
                 return;
             }
         }
     }
-    //d_i[tid] = p[threadIdx.x];
-#endif
-    //d_i[tid] = -3;
-
-
-    return;
 }
-int skyline_cuda( const points_t *points, int *s )
+
+int skyline_cuda_0( const points_t *points, int *s )
 {
     const int D = points->D;
     const int N = points->N;
     const float *P = points->P;
-    const int nblocks=1+(N-1)/32;
-    printf("nblock : %d\n", nblocks);
+    /* visto che la memoria shared è limitata e dipende da D quanta me ne serve preferisco usare una dimensione del blocco più piccolo
+        (con BLKDIM_1 = 1024 e D = 10 non c'è abbastanza memoria shared per eseguire il kernel */
+    const int nblocks=1+(N-1)/BLKDIM_1;
+
     int i, r = 0;
-    
-    float *h_i;
-    h_i=(float*)calloc(N*D,sizeof(float));
-    
-   // for(int k=0; k<N*D; k++) h_i[k]=P[k%D];
+
 
     for (i=0; i<N; i++) {
         s[i] = 1;
     }
     int *d_s;
     float *d_P;
-    float *d_i;
-    float *h_test=(float*)calloc(32*2,sizeof(float));
-    float *test;
-    float *t;
-    float *h_t=(float*)calloc(96,sizeof(float));
-    
+
     cudaSafeCall( cudaMalloc( (void**)&d_s, N*sizeof(int)) );
     cudaSafeCall( cudaMalloc( (void**)&d_P, N*D*sizeof(float)) );
-    cudaSafeCall( cudaMalloc( (void**)&d_i, N*D*sizeof(float)) );
-    cudaSafeCall( cudaMalloc( (void**)&test, 32*2*sizeof(float)) );
-    cudaSafeCall( cudaMalloc( (void**)&t, 96*sizeof(float)) );
+
     cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
     cudaSafeCall( cudaMemcpy( d_P, P, N*D*sizeof(float), cudaMemcpyHostToDevice) );
-    cudaSafeCall( cudaMemcpy( d_i, h_i, N*D*sizeof(float), cudaMemcpyHostToDevice) );
-    cudaSafeCall( cudaMemcpy( test, h_test, 32*2*sizeof(float), cudaMemcpyHostToDevice) );
 
     
     for (i=0; i<N; i++) {
         if ( s[i] ) {
-            //for(int k=0; k<N*D; k++) h_i[k]=P[i*D+k%D];
-            //cudaMemcpy( d_i, h_i, N*D*sizeof(float), cudaMemcpyHostToDevice);
-            kernel<<<nblocks,32,D*32*sizeof(float)>>>(i, N, D, d_s, d_P);
-            //printf("porco dio\n");
-            cudaSafeCall ( cudaMemcpy( h_i, d_i, D*N*sizeof(float), cudaMemcpyDeviceToHost) );
-            //cudaCheckError();
+            kernel_0<<<nblocks,BLKDIM_1,D*BLKDIM_1*sizeof(float)>>>(i, N, D, d_s, d_P);
+
             cudaSafeCall( cudaMemcpy( s, d_s, N*sizeof(int), cudaMemcpyDeviceToHost) );
             cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+        }
+    }
+    
+    for(i=0;i<N;i++){
+        if(s[i]) r++;
+    }
 
-            //printf("\n");
-            //printf("%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f\n", h_i[0], h_i[1], h_i[2],h_i[3],h_i[4],h_i[5],h_i[6],h_i[7],h_i[8],h_i[9],h_i[10],h_i[11],h_i[12],h_i[13],h_i[14],h_i[15],h_i[16],h_i[33]);
-            //printf("\np");
-            //for(int lel=0;lel<96; lel++) printf(" %f",h_t[lel]);
+    cudaFree(d_s);
+    cudaFree(d_P);
 
-            //for(int lel=0;lel<64; lel+=2) printf("tid=[%d] %f %f      \n",lel/2,h_test[lel], h_test[lel+1] );
-            //printf("\n");
-            //printf("%d\n", i );
+    return r;
+}
+/* questa versione è sostanzialmente identica alla versione 0, l'unica differenza è che "ruoto" l'insieme dei punti in modo che i thread possano accedere 
+    in memoria globale in maniera contigua e teoricamente così migliorare le prestazioni a costo di dover riorganizzare l'intero input di dati 
+    le uniche differenze nel kernel sono in (1), (2) e (3) quando accedo al vettore globale, nella funzione dell'host l'unica aggiunta è un for per riorganizzare i punti */
+__global__ void kernel_1(int i, int N, int D, int *d_s, float *d_P){
 
+    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    extern __shared__ float p[];
+    int k;
+    float temp;
+    float local_p[MAX_D];
+
+    if(threadIdx.x < D){
+        /* (1) */
+        temp=d_P[i+N*threadIdx.x];
+        for(k=0; k<BLKDIM_1; k++) {
+            p[threadIdx.x * blockDim.x + k] = temp;
+        }
+    }
+__syncthreads();
+    for(k=0; k<D; k++){
+        local_p[k] = p[threadIdx.x + k*blockDim.x];
+    }
+
+    if( tid >= N || tid == i || d_s[tid] == 0){
+        return;
+    } else {
+        //dominates d_s[p] & d_s[tid]
+
+        for (k=0; k<D; k++) {
+            /* (2) */
+            if (local_p[k] < d_P[tid+(N*k)]) {
+                return;
+            }
+        }
+        for (k=0; k<D; k++) {
+            /* (3) */
+            if (local_p[k] > d_P[tid+(N*k)]) {
+                d_s[tid]=0;
+                return;
+            }
+        }
+    }
+}
+
+
+
+int skyline_cuda_1( const points_t *points, int *s )
+{
+    const int D = points->D;
+    const int N = points->N;
+    const float *P = points->P;
+    const int nblocks=1+(N-1)/BLKDIM_1;
+    int i,k,r = 0;
+
+    float *h_i;
+    h_i=(float*)calloc(N*D,sizeof(float));
+    
+
+
+    for (i=0; i<N; i++) {
+        s[i] = 1;
+    }
+    /* qua vengono riorganizzati i punti, verrà usato questo vettore anziché P */
+    for(k=0; k<D; k++){
+        for(i=0; i<N; i++){
+            h_i[i+N*k] = P[k+i*D];
+        }
+    }
+    int *d_s;
+    float *d_i;
+
+    cudaSafeCall( cudaMalloc( (void**)&d_s, N*sizeof(int)) );
+    cudaSafeCall( cudaMalloc( (void**)&d_i, N*D*sizeof(float)) );
+
+    cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+    cudaSafeCall( cudaMemcpy( d_i, h_i, N*D*sizeof(float), cudaMemcpyHostToDevice) );
+
+    
+    for (i=0; i<N; i++) {
+        if ( s[i] ) {
+
+            kernel_1<<<nblocks,BLKDIM_1,D*BLKDIM_1*sizeof(float)>>>(i, N, D, d_s, d_i);
+
+            cudaSafeCall( cudaMemcpy( s, d_s, N*sizeof(int), cudaMemcpyDeviceToHost) );
+            cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
         }
     }
 
     
-    //kernel<<<4,32,2*D*sizeof(float)>>>();
     for(i=0;i<N;i++){
         if(s[i]) r++;
     }
+    cudaFree(d_s);
+    cudaFree(d_i);
+    free(h_i);
     return r;
 }
 
+/* invece nelle seguenti 2 versioni quello che ho cercato di fare è accedere meno volte possibile, almeno per il punto i, alla memoria globale e 
+farlo in maniera contigua, la cosa positiva è che mi serve una quantità minore di memoria shared (1.5*BLKDIM) ma quella negativa sono tante sincronizzazioni 
+nel processo, inizialmente speravo che con blocchi da 32 thread non dovessi sincronizzare visto che è un singolo warp che accede in memoria contigua ma 
+anche in quel caso servono le sincronizzazioni, dunque ho optato a quel punto a fare blocchi di thread il più grandi possibili in modo da fare meno accessi 
+in memoria globale visto che raddopiando il numero di thread per blocco devo fare solo 1 accesso in più */
+__global__ void kernel_2(int i, int N, int D, int *d_s, float *d_P){
+
+    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    extern __shared__ float p[];
+    int k,f;
+    float glob_temp;
+    float temp;
+    float local_p[MAX_D];
+    
+/* accedo in memoria globale solo 1 volta, poi sfrutto la memoria shared per costruirmi 1 vettore locale,
+ che avrà valori pari alla dimensione i-esima di P */
+    glob_temp=d_P[i*D + threadIdx.x];
+//__syncthreads();
+    for(f=0; f<D; f++){
+        
+        /* ora ogni volta ricopio in memoria shared il vettore glob_temp (quello preso dalla memoria globale) spostandosi di posizione (da 0 a +1 +2 +4 +8 +16..)
+           ricopiando temporaneamente il vettore ottenuto ogni volta in temp e procedendo da temp */
+__syncthreads(); 
+        temp=glob_temp;
+        p[threadIdx.x] = temp;
+__syncthreads();
+        glob_temp = p[threadIdx.x + 1];
+__syncthreads();
+        p[threadIdx.x + 1] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 2] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 4] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 8] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 16] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 32] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 64] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 128] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 256] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 512] = temp;
+__syncthreads();
+
+        local_p[f] = p[threadIdx.x];
+    }
+    __syncthreads();
+
+    if( tid >= N || tid == i || d_s[tid] == 0){
+        return;
+    } else {
+        
+        //dominates d_s[p] & d_s[tid]
+        for (k=0; k<D; k++) {
+            if (local_p[k] < d_P[tid*D+k]) {
+                return;
+            }
+        }
+        for (k=0; k<D; k++) {
+            if (local_p[k] > d_P[tid*D+k]) {
+
+                d_s[tid]=0;
+                return;
+            }
+        }
+    }
+}
+
+
+int skyline_cuda_2( const points_t *points, int *s )
+{
+    const int D = points->D;
+    const int N = points->N;
+    const float *P = points->P;
+    const int nblocks=1+(N-1)/BLKDIM;
+    int i, r = 0;
+
+    for (i=0; i<N; i++) {
+        s[i] = 1;
+    }
+    int *d_s;
+    float *d_P;
+
+    cudaSafeCall( cudaMalloc( (void**)&d_s, N*sizeof(int)) );
+    cudaSafeCall( cudaMalloc( (void**)&d_P, N*D*sizeof(float)) );
+
+    cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+    cudaSafeCall( cudaMemcpy( d_P, P, N*D*sizeof(float), cudaMemcpyHostToDevice) );
+
+    for (i=0; i<N; i++) {
+        if ( s[i] ) {
+            kernel_2<<<nblocks,BLKDIM,2*BLKDIM*sizeof(float)>>>(i, N, D, d_s, d_P);
+
+            cudaSafeCall( cudaMemcpy( s, d_s, N*sizeof(int), cudaMemcpyDeviceToHost) );
+            cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+        }
+    }
+    for(i=0;i<N;i++){
+        if(s[i]) r++;
+    }
+    cudaFree(d_s);
+    cudaFree(d_P);
+
+    return r;
+}
+
+/* in questa ultima versione ho cercato di usare l'idea della versione precedente per costruire il vettore delle coordinate del punto i e unirla a quella 
+di ruotare l'input per avere accessi contigui */
+__global__ void kernel_3(int i, int N, int D, int *d_s, float *d_P){
+
+    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    extern __shared__ float p[];
+    int k;
+    float glob_temp;
+    float temp;
+    float local_p[MAX_D];
+    //int max_index = N*D; idea brutta per evitare di mettere un operatore %
+    
+/* accedo in memoria globale solo 1 volta, poi sfrutto la memoria shared per costruirmi 1 vettore locale,
+ che avrà valori pari alla dimensione i-esima di P */
+    if(threadIdx.x < D){
+        glob_temp=d_P[i+N*threadIdx.x];
+    } else {
+        glob_temp = 0;
+    }
+//__syncthreads();
+    for(k=0; k<D; k++){
+        
+        /* ora ogni volta ricopio in memoria shared il vettore glob_temp (quello preso dalla memoria globale) spostandosi di posizione (da 0 a +1 +2 +4 +8 +16)
+           ricopiando temporaneamente il vettore ottenuto ogni volta in temp e procedendo da temp */
+__syncthreads(); 
+        temp=glob_temp;
+        p[threadIdx.x] = temp;
+__syncthreads();
+        glob_temp = p[threadIdx.x + 1];
+__syncthreads();
+        p[threadIdx.x + 1] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 2] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 4] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 8] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 16] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 32] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 64] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 128] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 256] = temp;
+__syncthreads();
+        temp=p[threadIdx.x];
+__syncthreads();
+        p[threadIdx.x + 512] = temp;
+__syncthreads();
+
+        local_p[k] = p[threadIdx.x];
+    }
+
+    __syncthreads();
+    if( tid >= N || tid == i || d_s[tid] == 0){
+        return;
+    } else {
+        
+        //dominates d_s[p] & d_s[tid]
+        for (k=0; k<D; k++) {
+            if (local_p[k] < d_P[tid+N*k]) {
+                return;
+            }
+        }
+        for (k=0; k<D; k++) {
+            if (local_p[k] > d_P[tid+N*k]) {
+
+                d_s[tid]=0;
+                return;
+            }
+        }
+    }
+}
+
+
+
+int skyline_cuda_3( const points_t *points, int *s )
+{
+    const int D = points->D;
+    const int N = points->N;
+    const float *P = points->P;
+    const int nblocks=1+(N-1)/BLKDIM;
+    int i,k, r = 0;
+    float *h_i;
+    h_i=(float*)calloc(N*D,sizeof(float));
+
+    for (i=0; i<N; i++) {
+        s[i] = 1;
+    }
+    /* qua ruoto i punti x1,y1,x2,y2,x3,y3... -> x1,x2,x3,...,y1,y2,y3 */
+    for(k=0; k<D; k++){
+        for(i=0; i<N; i++){
+            h_i[i+N*k] = P[k+i*D];
+        }
+    }
+    int *d_s;
+    float *d_i;
+    
+    cudaSafeCall( cudaMalloc( (void**)&d_s, N*sizeof(int)) );
+    cudaSafeCall( cudaMalloc( (void**)&d_i, N*D*sizeof(float)) );
+
+    cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+    cudaSafeCall( cudaMemcpy( d_i, h_i, N*D*sizeof(float), cudaMemcpyHostToDevice) );
+    for (i=0; i<N; i++) {
+        if ( s[i] ) {
+            kernel_3<<<nblocks,BLKDIM,2*BLKDIM*sizeof(float)>>>(i, N, D, d_s, d_i);
+            cudaSafeCall( cudaMemcpy( s, d_s, N*sizeof(int), cudaMemcpyDeviceToHost) );
+            cudaSafeCall( cudaMemcpy( d_s, s, N*sizeof(int), cudaMemcpyHostToDevice) );
+        }
+    }
+    for(i=0;i<N;i++){
+        if(s[i]) r++;
+    }
+    cudaFree(d_s);
+    cudaFree(d_i);
+    free(h_i);
+    return r;
+}
 int skyline( const points_t *points, int *s )
 {
     const int D = points->D;
@@ -330,23 +650,60 @@ int main( int argc, char* argv[] )
     read_input(&points);
     int *s = (int*)malloc(points.N * sizeof(*s));
     assert(s);
+    /*
     const double tstart = hpc_gettime();
     const int r = skyline(&points, s);
     const double elapsed = hpc_gettime() - tstart;
-    //print_skyline(&points, s, r);
+    print_skyline(&points, s, r);
 
     fprintf(stderr,
             "\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
             points.N, points.D, r, elapsed);
+    */
 
-    const double cuda_start = hpc_gettime();
-    const int cuda_r = skyline_cuda(&points, s);
-    const double cuda_elapsed = hpc_gettime() - cuda_start;
-    //print_skyline(&points, s, r);
+    if(points.D < 100){
+        const double cuda_start_0 = hpc_gettime();
+        const int cuda_r_v0 = skyline_cuda_0(&points, s);
+        const double cuda_elapsed_0 = hpc_gettime() - cuda_start_0;
+        print_skyline(&points, s, cuda_r_v0);
+
+        fprintf(stderr,
+                "\n(v_0)\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+                points.N, points.D, cuda_r_v0, cuda_elapsed_0);
+
+
+        const double cuda_start = hpc_gettime();
+        const int cuda_r = skyline_cuda_1(&points, s);
+        const double cuda_elapsed = hpc_gettime() - cuda_start;
+        print_skyline(&points, s, cuda_r);
+
+        fprintf(stderr,
+            "\n(v_1)\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+            points.N, points.D, cuda_r, cuda_elapsed);
+    } else { 
+        fprintf(stderr, "v_0 e v_1 non utilizzate poiché il numero di dimensioni troppo alto\n");
+    }
+
+    const double cuda_start_2 = hpc_gettime();
+    const int cuda_r_v2 = skyline_cuda_2(&points, s);
+    const double cuda_elapsed_2 = hpc_gettime() - cuda_start_2;
+    print_skyline(&points, s, cuda_r_v2);
 
     fprintf(stderr,
-            "\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
-            points.N, points.D, cuda_r, cuda_elapsed);
+            "\n(v_2)\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+            points.N, points.D, cuda_r_v2, cuda_elapsed_2);
+
+
+
+    const double cuda_start_3 = hpc_gettime();
+    const int cuda_r_v3 = skyline_cuda_3(&points, s);
+    const double cuda_elapsed_3 = hpc_gettime() - cuda_start_3;
+    print_skyline(&points, s, cuda_r_v3);
+
+    fprintf(stderr,
+            "\n(v_3)\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+            points.N, points.D, cuda_r_v3, cuda_elapsed_3);
+
     free_points(&points);
     free(s);
     return EXIT_SUCCESS;
