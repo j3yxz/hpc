@@ -90,7 +90,7 @@ void read_input( points_t *points )
         fprintf(stderr, "FATAL: can not read the number of points\n");
         exit(EXIT_FAILURE);
     }
-    /* devo aggiungere n-threads punti che mi serviranno durante la funzione di skyline, inoltre uso la posix_memalign */
+  //  const size_t mem_vlen_mul = (VfLEN - N%VfLEN)%VfLEN;
 #if 1
     assert(!posix_memalign((void**)&P, __BIGGEST_ALIGNMENT__, D * ( N + omp_get_max_threads() ) * sizeof(*P) ) );
     assert(P);
@@ -105,7 +105,12 @@ void read_input( points_t *points )
             }
         }
     }
-
+    /*  se N non fosse multiplo di VLEN setto i valori eccessivi aggiunti uguali
+        ai primi punti che si incontrano in modo da non interferire col risultato 
+        dello skyline */
+#if 0
+    if(mem_vlen_mul) memcpy(P+N, P, D*mem_vlen_mul*sizeof(*P));
+#endif
     points->P = P;
     points->N = N;
     points->D = D;
@@ -140,7 +145,7 @@ int dominates( const float * p, const float * q, int D )
 #if 0
 int dominates_simd(float* P, int* v8i_s_p, int* index_ex, int* index_in, v8f* p_8 , v8f* q_8, int D )
 {   
-  //  printf("entro d_simd\n");
+
     int k, local_r=0;
     float tmp;
 
@@ -157,24 +162,17 @@ int dominates_simd(float* P, int* v8i_s_p, int* index_ex, int* index_in, v8f* p_
         int p6 = P[index_ex[6]*D+i];
         int p7 = P[index_ex[7]*D+i];
     */  *(p_8+i)=(v8f)_mm256_setr_ps(P[index_ex[0]*D+i], P[index_ex[1]*D+i], P[index_ex[2]*D+i], P[index_ex[3]*D+i], P[index_ex[4]*D+i], P[index_ex[5]*D+i], P[index_ex[6]*D+i], P[index_ex[7]*D+i]);
-     //   v8f porcodio =(v8f)_mm256_setr_ps(p0, p1, p2, p3, p4, p5, p6, p7);
         *(q_8+i)=(v8f)_mm256_setr_ps(P[index_in[0]*D+i], P[index_in[1]*D+i], P[index_in[2]*D+i], P[index_in[3]*D+i], P[index_in[4]*D+i], P[index_in[5]*D+i], P[index_in[6]*D+i], P[index_in[7]*D+i]);
-        //*(p_8 + i) = porcodio;
+
     }
-    
- //   printf("P[ind_ex[0]]: [ %f ] __ P[ind_ex[7]]: [ %f ]\n\n",P[index_ex[0]*D], P[index_ex[7]*D]);
-  //  printf("p_8 [%f] [%f] [%f] [%f] [%f] [%f] [%f] [%f]\n", (float)p_8[0][0], (float)(*p_8)[1], (float)(*p_8)[2], (float)(*p_8)[3], (float)(*p_8)[4], (float)(*p_8)[5], (float)(*p_8)[6], (float)(*p_8)[7]);
-  //  printf("q_8 [%f] [%f] [%f] [%f] [%f] [%f] [%f] [%f]\n", (float)(*q_8)[0], (float)(*q_8)[1], (float)(*q_8)[2], (float)(*q_8)[3], (float)(*q_8)[4], (float)(*q_8)[5], (float)(*q_8)[6], (float)(*q_8)[7]);
-   
+       
     for(int shift=0; shift<ViLEN; shift++){
         /* The following loop could be merged, but the keep them separated
            for the sake of readability */
-    //    printf("q_8 [%f] [%f] [%f] [%f] [%f] [%f] [%f] [%f]\n", (float)(*q_8)[0], (float)(*q_8)[1], (float)(*q_8)[2], (float)(*q_8)[3], (float)(*q_8)[4], (float)(*q_8)[5], (float)(*q_8)[6], (float)(*q_8)[7]);
         res=(v8i)_mm256_setzero_ps();
         for (k=0; k<D; k++) {
             res+= (p_8[k] < q_8[k]);
         }
-     //   printf("res [%d] [%d] [%d] [%d] [%d] [%d] [%d] [%d] \n", res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7] );
         /* faccio in modo che se vi fosse anche una sola dimensione non dominata
            questa valga più del ciclo dopo */
         res*=D;
@@ -183,14 +181,11 @@ int dominates_simd(float* P, int* v8i_s_p, int* index_ex, int* index_in, v8f* p_
             res-= (p_8[k] > q_8[k]);
         }
         
-     //   printf("res [%d] [%d] [%d] [%d] [%d] [%d] [%d] [%d] \n", res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7] );
         /* ora tolgo dal vettore v8i_s i punti che vengono dominati e aggiorno
            il contatore local_r */
-     //   printf("shift [%d] \n", shift );
         for(k=0; k<ViLEN; k++){
             
             if(res[k] > 0 && v8i_s_p[index_in[ (k + shift) & 7]]){
-    //            printf("index_in[ (k - shift) & 7] ::: [%d] \n", index_in[ (k - shift) & 7] );
                 local_r++;
                 v8i_s_p[index_in[(k + shift) & 7]] = 0;
             }
@@ -210,9 +205,6 @@ int dominates_simd(float* P, int* v8i_s_p, int* index_ex, int* index_in, v8f* p_
 
     }
 
-    //free(q_8);
-    //free(p_8);
-
     return local_r;
 
 }
@@ -226,7 +218,7 @@ int dominates_simd_v2(float* P, int* v8i_s_p, int* index_in, v8f* p_8 , v8f* q_8
 
     v8i res;
     
-    /*la funziona mi passa VLEN indici (p_8 e q_8) e devo vedere i punti associati se si dominano tra loro*/
+    /* la funziona mi passa VLEN indici (p_8 e q_8) e devo vedere i punti associati se si dominano tra loro */
     for(int i = 0; i<D ;i++){
         *(q_8+i)=(v8f)_mm256_setr_ps(P[index_in[0]*D+i], P[index_in[1]*D+i], P[index_in[2]*D+i], P[index_in[3]*D+i], P[index_in[4]*D+i], P[index_in[5]*D+i], P[index_in[6]*D+i], P[index_in[7]*D+i]);
 
@@ -287,31 +279,20 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     int i = 0, r = N;
     int count_ex=0, count_in;
     int local_r[n_threads];
-    /* index_ex è il vettore contenente gli indici dei punti che andranno a riempire p_8 
-    p_8 e q_8 sono vettori di punti veri e propri che verranno passati alla funzione dominates_simd_v2() 
-    q_8 è allocato con la posix_memalign poco sotto sia perché ha bisogno di 1 spazio in più sia per 
-    poter usare le funzioni simd, p_8 verrà riempito solo dal thread master mentre ogni thread lavorerà 
-    col proprio q_8 */
     int index_ex[ViLEN]; 
     v8f p_8[D];
     v8f* q_8;
 
 
 
-    /* v8i_s è il corrispondende del vettore s in cui vi sono 1 per i punti non dominati e 0 per i punti dominati */
+
 
     for (i=0; i<N/ViLEN +1; i++) {
-        *(v8i_s+i) = (v8i)_mm256_set1_epi32(1); /* {1,1,1,1,
-                    1,1,1,1}; */
+        *(v8i_s+i) = (v8i)_mm256_set1_epi32(1); /* {1,1,1,1,1,1,1,1}; */
     }
 
-
     if(0 != N%ViLEN) *(v8i_s+i) =(v8i)_mm256_set1_epi32(1);
-
-    /* in questo ciclo setto a 0 degli specifici punti, che saranno usati nel caso in cui non si riescano a 
-    raggiungere 8 punti da passare alla dominates_simd(), punti mancanti verranno riempiti di punti "bonus"
-    che sono aggiunti apposta per non interferire con l'algoritmo e ogni dimensione sotto viene settato al
-    valore più basso possibile */
+    /* tolgo i punti aggiunti "in più" */
     for(i=0; i<n_threads; i++) *(v8i_s_p+N+i)=0;
 
     i=0;
@@ -327,28 +308,23 @@ int skyline_simd_for( const points_t *points, v8i* v8i_s )
     int index_in[ViLEN];
     int local_i;
     count_in=0;
-    /* ogni thread inizializza un proprio punto "bonus" in modo da evitare race condition */
+    /* inizializzo i punti "in più" a valori che non possano alterare il risultato finale */
     for(int d=0; d<D; d++) P[(N + thread_id)*D+d] = -FLT_MAX;
-
     local_r[thread_id]=0;
 	
-
+    /* visto che nella funzione dominates_simd_v2 che verrà usata si copiano VfLEN elementi a partire dall'indice 1, per sicurezza q_8 lo alloco lungo 9 */
     assert(! posix_memalign((void**)&(q_8), __BIGGEST_ALIGNMENT__, D*sizeof(float)*(VfLEN + 1)) );
 
 
 
-#pragma omp barrier 
+#pragma omp barrier
 
     do { 
-/* questa prima parte è come se fosse il for più esterno dell'algoritmo originale 
-un solo thread riempie il vettore p_8, scorrendo sull'indice i, per farlo,
-deve trovare i primi 8 punti non dominati e inserire i loro indici in index_ex 
-una volta fatto ciò è come se si entrasse nel ciclo for interno (sempre facendo il
-paragone con l'algoritmo originale) all'interno del quale ogni thread riempie il proprio
-vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali tra queste
-2 coppie di 8 punti sono dominati */
-#pragma omp master      
+
+#pragma omp master
 {
+        /* questo è il ciclo in cui il master riempie p_8 di punti da passare alla funzione dominates_simd_v2
+        servono ViLEN (8) punti affinché si possa procedere al passaggio successivo*/
         count_ex=0;
         while(count_ex < ViLEN && i<N){
 
@@ -359,10 +335,10 @@ vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali 
             }
             ++i;   
         }
+        /* controllo aggiuntivo nel caso in cui si sia uscito dal while precedente a causa di "i<N", in generale viene eseguita la parte "else" */
         if (count_ex != ViLEN ){
-        	/* nel caso in cui non si riescano ad avere 8 punti da inserire in p_8, si inseriscono i punti "bonus" che non posso interferire con la dominates_simd() */
+
         	while(count_ex < ViLEN) index_ex[count_ex++]=N+thread_id;
-	        
 	        for(int d = 0; d<D ;d++){
 	                *(p_8+d)=(v8f)_mm256_setr_ps(P[index_ex[0]*D+d], P[index_ex[1]*D+d], P[index_ex[2]*D+d], P[index_ex[3]*D+d], P[index_ex[4]*D+d], P[index_ex[5]*D+d], P[index_ex[6]*D+d], P[index_ex[7]*D+d]);
 	        }
@@ -373,10 +349,11 @@ vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali 
             }
         }
 }
+
 #pragma omp barrier
+/* in questo ciclo for ogni thread cerca 8 punti da inserire in q_8 per poterli paragonare con p_8, lo fa utilizzando la variabile "index_in" */
 #pragma omp for schedule(static)
         for (int j=0; j<N; j++ ) {
-
             if (v8i_s_p[j]) {
                 
                 index_in[count_in++]=j;
@@ -384,16 +361,16 @@ vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali 
                     count_in=0;
 
                     local_r[thread_id]+=dominates_simd_v2(P, v8i_s_p, index_in, p_8, q_8, D);
-
-
                 }       
             }
         }
-
+/* nel caso in cui il for precedente sia finito con una iterazione "mancata" ovvero la condizione j<N è diventata falsa ma vi erano dei punti
+    pronti per essere passati alla "dominates_simd_v2" (ovvero count_in era rimasta maggiore di 0), ogni thread fa una iterazione in più del ciclo
+    for precedente */
 #pragma omp for schedule(static)
         for(int j=0; j<n_threads; j++){
             if(count_in) {
-
+                /* qua vengono inseriti i punti "fasulli" che hanno tutte le coordinate pari a -MAX_FLT in q_8 */
                 while(count_in < ViLEN) index_in[count_in++]=N+thread_id;
 
                 count_in=0;
@@ -401,11 +378,16 @@ vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali 
                 local_r[thread_id]+=dominates_simd_v2(P, v8i_s_p, index_in, p_8, q_8, D );
             }
         }
-
+/* modo piuttosto brutto per uscire dal do while più esterno.. in generale inizialmente per evitare sta cosa ho usato i task e la cosa andava bene
+finché i dati rimasti in cache su un processore non venivano usati sull'altro processore visto che non ho saputo avere più controllo nei task (i tempi
+di esecuzione diventavano assurdi in certi casi).
+Ho preferito fare questa versione che potessere sfruttare tutti i 12 thread senza "ripercussioni" ma anche nella versione coi task se si avviava il 
+programma con numactl --cpunodebind=0 (oppure 1) i tempi di esecuzione erano molto simili (ovviamente considerando che c'erano solo 6 core a quel punto).
+In realtà però anche in questa versione il problema di avere un ambiente numa si fa sentire, anche se in maniera più contenuta. (Una possibile soluzione
+è quella di copiare l'insieme di tutti i punti per ogni processore o per ogni core) */
 #pragma omp atomic read 
         local_i=i;
-
-#pragma omp barrier 
+#pragma omp barrier
     } while(local_i<local_N);
 
 
@@ -414,7 +396,6 @@ vettore q_8 e a quel punto si usa la funzione dominates_simd() per vedere quali 
 /* fine regione parallela */
 
 }
-
     return r;
 }
 
@@ -462,12 +443,6 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
     for(i=0; i<n_threads; i++) *(v8i_s_p+N+i)=0;
 
 
-/* qui non si può parallelizzare */
-
-  //  printf("wot\n");
-
-//    assert(! posix_memalign((void**)&p_8, __BIGGEST_ALIGNMENT__, D*sizeof(float)*VfLEN) );
- //   assert(! posix_memalign((void**)&q_8, __BIGGEST_ALIGNMENT__, D*sizeof(float)*VfLEN) );
 
 #if __GNUC__ < 9
  #pragma omp parallel num_threads(n_threads) default(none) private(thread_id) shared(i, v8i_s_p, v8i_s, P, th_offset_in, th_offset_ex, p_8,q_8, count_in, count_ex, index_ex, index_in, local_r) reduction(-:r)
@@ -482,28 +457,20 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
 
 
     assert(! posix_memalign((void**)&p_8, __BIGGEST_ALIGNMENT__, D*sizeof(float)*(VfLEN + 1)) );
-  //  p_8=malloc(D*sizeof(float)*VfLEN);
-  //  q_8=malloc(D*sizeof(float)*VfLEN);
+
     assert(! posix_memalign((void**)&q_8, __BIGGEST_ALIGNMENT__, D*sizeof(float)*(VfLEN + 1)) );
-   // printf("diogay %d\n", thread_id);
+
 #pragma omp barrier
 #pragma omp master    
 {
     for (i=0; i<N; i++) { 
-    //    printf("i=[%d] \n",i);
+
         if (v8i_s_p[i]) { 
 
-            index_ex[th_offset_ex][count_ex++]=i; //printf("if i=[%d] th_offset_ex:[%d]\n", i, th_offset_ex);
+            index_ex[th_offset_ex][count_ex++]=i; /
             if(count_ex == ViLEN){
                 count_ex=0;
 
-            /* qui si può paralellizzare */
-
-            //    printf("for ex %d\n", thread_id);
-
-//#pragma omp parallel num_threads(n_threads) default(none) shared(i, v8i_s, v8i_s_p, P, count_in, count_ex, index_th_offset, index_ex, index_in) reduction(+:local_r)
-
-              // #pragma omp single
                for (int j=0; j<N; j++ ) {
                     
                     if (v8i_s_p[j]) {
@@ -511,23 +478,17 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
                         index_in[th_offset_in][count_in++]=j;
                         if(count_in == ViLEN) {
                             count_in=0;
-                       //     printf("for in j:[%d]\n", j);
-                            /* faccio partire il task */
-                            //#pragma omp task firstprivate(th_offset_in, th_offset_ex)
-{
-                       //     printf(" ho fatto partire il task %d\n", thread_id );
+
                             local_r[thread_id]+=dominates_simd(P, v8i_s_p, index_ex[th_offset_ex], index_in[th_offset_in], p_8, q_8, D);
-}                     //      printf("__i:[%d] j:[%d] local_r:[%d]__\n",i,j,local_r[thread_id]); 
-                    //        printf("ho fatto spawnare sto cazzo di task? %d\n", thread_id);
+
                             th_offset_in++;
                         }       
                     }
-#pragma omp taskwait                    /* boh */
+#pragma omp taskwait
                 }
                 
                 if(count_in) {
-                    /* devo gestire i rimanenti*/
-                //    printf("if count_in 323 %d\n", thread_id);
+
                     while(count_in < ViLEN) index_in[th_offset_in][count_in++]=N;
 
                     count_in=0;
@@ -535,20 +496,18 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
                     th_offset_in++;
                 }
                 th_offset_ex++;
-            //    printf("th_offset_ex\n");
-
             }
             
         }
         
     }
- //   printf("338\n");
+
     /* stesso caso del for interno solo che aggiungo a mano nei punti mancanti un punto che non può influire 
        dentro a index_ex, ora devo fare una sola iterazione del for esterno */
     if(count_ex){ //printf("if count_ex 341\n");
 
         while(count_ex < ViLEN) index_ex[th_offset_ex][count_ex++]=N;
-     //   printf("344 dopo while count_ex:[%d]\n", count_ex);
+
 
         for (int j=0; j<N; j++ ) {
             if (v8i_s_p[j]) {
@@ -557,14 +516,12 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
                 if(count_in == ViLEN) {
                     count_in=0;
                         /* faccio partire il task */
-                    //#pragma omp task firstprivate(th_offset_in,th_offset_ex)
                     local_r[thread_id]+=dominates_simd(P, v8i_s_p, index_ex[th_offset_ex], index_in[th_offset_in], p_8, q_8, D);
                     th_offset_in++;
                 }            
             }
         }
-        
-   //     printf("359 dopo for\n");
+
         if(count_in) {
                     /* devo gestire i rimanenti*/
 
@@ -576,7 +533,7 @@ int skyline_simd( const points_t *points, v8i* v8i_s )
         }
         #pragma omp taskwait
     }
-  //  printf("free?\n");
+
 
 } /* fine di omp single */
 
@@ -607,7 +564,7 @@ int skyline( const points_t *points, int *s )
     }
 
     const int n_threads = omp_get_max_threads();
-  //  printf("%d\n", n_threads);
+
 /* qui non si può parallelizzare */
     for (i=0; i<N; i++) {
 
@@ -689,191 +646,29 @@ int main( int argc, char* argv[] )
     //print_skyline(&points, s, r);
 
     fprintf(stderr,
-            "\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+            "\n(omp)\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
             points.N, points.D, r, elapsed);
-
-    const double ts = hpc_gettime();
-    const int r_simd = skyline_simd_for(&points, v8i_s);
-    const double el = hpc_gettime() - ts;
+    if(points.D < 20){
+        const double ts = hpc_gettime();
+        const int r_simd = skyline_simd_for(&points, v8i_s);
+        const double el = hpc_gettime() - ts;
+        fprintf(stderr,
+            "\n(simd)\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
+        points.N, points.D, r_simd, el);
+    } else {
+        fprintf(stderr, "Versione SIMD non utilizzata\n");
+    }
+#if 0
+    const double t = hpc_gettime();
+    const int r_s = skyline_simd(&points, v8i_s);
+    const double e = hpc_gettime() - t;
     fprintf(stderr,
         "\n\t%d points\n\t%d dimensione\n\t%d points in skyline\n\nExecution time %f seconds\n",
-        points.N, points.D, r_simd, el);
+        points.N, points.D, r_s, e);
+#endif
+
     free_points(&points);
     free(s);
     free((int*)v8i_s);
     return EXIT_SUCCESS;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#if 0
-
-
-typedef struct Next_index {
-        int index;
-        struct Next_index* next;
-    } next_index;
-
-int sk_simd( const points_t *points, int *s )
-{
-
-    const int D = points->D;
-    const int N = points->N;
-    const float *P = points->P;
-    int i, r = N, local_r = 0;
-    v8i v8i_s[(N+VLEN-1)/VLEN], v8i_t_inner, v8i_t_extern;
-
-
-
-/* questa lista mi serve per tener traccia di quale sarà il prossimo punto da analizzare */
-
-    next_index* s_index_list_head=malloc(sizeof(next_index));
-    next_index* s_index_list_tmp=s_index_list_head;
-
-    for(i=0; i<N; i++){
-        s_index_list_tmp->index=i;
-        s_index_list_tmp->next=malloc(sizeof(next_index));
-        s_index_list_tmp=s_index_list_tmp->next;
-        s_index_list_tmp->next=NULL;
-    }
-    s_index_list_tmp=s_index_list_head;
-    for (i=0; i<N; i+=VLEN) {
-        v8i_s[i] = _mm256_set_epi32(1);
-    }
-    next_index* s_index_list_tmp=s_index_list_head;
-    const int n_threads = omp_get_max_threads();
-
-
-
-    /* qui non si può parallelizzare */
-    do {
-        v8i_t_extern=_mm256_set1_epi32(0,1,2,3,4,5,6,7)
-        
-
-    } while (s_index_list_tmp->next) {
-            /* qui si può paralellizzare --forse--*/
-        for(i=0; i<VLEN; i++) s_index_list_tmp=s_index_list_tmp->next;
-/*
-#if __GNUC__ < 9
- #pragma omp parallel for num_threads(n_threads) default(none) shared(i, s, P) reduction(+:local_r)
-#else
- #pragma omp parallel for num_threads(n_threads) default(none) shared(n_threads, D, N, P, i, s, r) reduction(+:local_r)
-#endif
-*/
-        next_index* s_index_list_inwhile=s_index_list_head;
-        while (s_index_list_inwhile) {
-            next_index* tmp = s_index_list_inwhile;
-            for(i=0; i<VLEN; i++) {
-                tmp=tmp->next;
-                if(tmp == NULL) break;
-            }
-            if(i<VLEN){
-                /* significa che è l'ultima iterazione del while interno da fare */
-                /* qua posso mettere una barriera tra task in modo che l'ultimo aggiorni il tutto */
-            } else {
-                /* significa che ci sono altre iterazioni da fare */
-                v8i_t_inner= _mm256_set_epi32(s_index_list_inwhile->index,
-                                            s_index_list_inwhile->next->index,
-                                            s_index_list_inwhile->next->next->index,
-                                            s_index_list_inwhile->next->next->next->index,
-                                            s_index_list_inwhile->next->next->next->next->index,
-                                            s_index_list_inwhile->next->next->next->next->next->index,
-                                            s_index_list_inwhile->next->next->next->next->next->next->index,
-                                            s_index_list_inwhile->next->next->next->next->next->next->next->index )
-       
-                v8i v8i_d_res = dominates_simd(P, v8i_t_extern, v8i_t_inner, D )
-                
-                local_r=update_next_index_list( v8i_d_res ,&s_index_list_head, prev);
-                
-                
-            
-            }
-            if(i == 0) {
-                /* significa che non è risultato i<VLEN e bisogna aggiornare i risultati del while */
-            }
-            prev=s_index_list_inwhile;
-            s_index_list_inwhile=tmp->next;
-            
-            
-        }
-        
-        r-=local_r;
-
-
-
-        if(s_index_list_tmp == NULL) {
-            /* significa che il punto */
-        }
-    }
-
-    return r;
-}
-
-int update_next_index_list( v8i v8i_d_res, next_index** s_index_list_head, next_index* prev){
-
-    int local_r=0;
-    next_index* tmp;
-
-    if(prev != NULL ){
-        /* questo if-else più esterni fanno sostanzialmente la stessa cosa ma uno lo fa nel caso
-            non ci sia bisogno di aggiornare la testa, mentre l'altro si occupa anche del caso in
-            cui bisogna eliminare il primo elemento della lista 
-        */
-        for(int i=0; i<VLEN; i++){
-            if(v8i_d_res[i]>-1) {
-                while(prev->next->index != v8i_d_res[i]) prev=prev->next;
-                tmp=prev->next-next;
-                free(prev->next)
-                prev->next=tmp;
-                local_r++;
-            }
-        }
-    } else {
-        /* qui significa che prev era NULL e dunque devo aggiornare s_index_list_head */
-        for(int i=0; i<VLEN; i++){
-            if(v8i_d_res[i]==(*s_index_list_head)->index){
-                /* significa che il primo elemento della lista è da eliminare */
-                prev=*s_index_list_head;
-                *s_index_list_head=(*s_index_list_head)->next;
-                free(prev);
-                prev=NULL;
-                local_r++;
-            } else {
-                /* l'if successivo serve per impostare prev una sola volta */
-                if(prev==NULL) prev=*s_index_list_head;
-
-                if(v8i_d_res[i]>-1) {
-                    while(prev->next->index != v8i_d_res[i]) prev=prev->next;
-                    tmp=prev->next-next;
-                    free(prev->next)
-                    prev->next=tmp;
-                    local_r++;
-                }
-            }
-        }
-    }
-
-    return local_r;
-}
-
-
-
-
-
-#endif
